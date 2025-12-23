@@ -15,8 +15,8 @@ export default function EsteeDashboard() {
             })));
 
             const potentialArbs = stockData.slice(0, 5).map(s => {
-                const futPrice = s.price * (1 + (Math.random() * 0.02));
-                const calc = calculateArbitrage(s.price, futPrice, 25);
+                const futPrice = parseFloat(s.price) * (1 + (Math.random() * 0.02));
+                const calc = calculateArbitrage ? calculateArbitrage(parseFloat(s.price), futPrice, 25) : { spread: 0, basis: '0%', arbitrageOpportunity: false };
                 return { ...s, futPrice: futPrice.toFixed(2), ...calc };
             });
             setArbOpp(potentialArbs);

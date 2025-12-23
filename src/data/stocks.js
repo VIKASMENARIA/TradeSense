@@ -362,3 +362,37 @@ const getSimulatedMarketDepth = () => {
         topLosers: sorted.slice(-10).reverse()
     };
 };
+
+// ----------------------------------------------------------------------
+// ALGO & ARBITRAGE UTILITIES (Restored)
+// ----------------------------------------------------------------------
+
+export const calculateArbitrage = (spotPrice, futurePrice, daysToExpiry) => {
+    const spread = futurePrice - spotPrice;
+    const costOfCarry = spotPrice * (0.06 * (daysToExpiry / 365));
+    const profit = spread - costOfCarry;
+
+    return {
+        spread: spread.toFixed(2),
+        basis: ((spread / spotPrice) * 100).toFixed(2) + "%",
+        arbitrageOpportunity: profit > 0.5,
+        projectedProfit: profit.toFixed(2)
+    };
+};
+
+export const getAlgoStatus = () => {
+    return [
+        { name: "I-ALPHA (Arb)", type: "Mkt Neutral", status: "RUNNING", dailyPnL: "+0.45%", exposure: "45Cr", latency: "2ms" },
+        { name: "L-S QUANT", type: "Statistical", status: "ADJUSTING", dailyPnL: "-0.12%", exposure: "12Cr", latency: "14ms" },
+        { name: "VOLATILITY HARVEST", type: "Options", status: "IDLE", dailyPnL: "0.00%", exposure: "0Cr", latency: "-" },
+        { name: "HFT SCALPER", type: "Deltas", status: "RUNNING", dailyPnL: "+1.20%", exposure: "5Cr", latency: "450us" }
+    ];
+};
+
+export const getExecutionQueue = () => {
+    return [
+        { id: "ORD-9982", symbol: "RELIANCE", algo: "TWAP", progress: 45, side: "BUY", avgPrice: 2450.40, totalQty: 50000, filled: 22500 },
+        { id: "ORD-9983", symbol: "TCS", algo: "VWAP", progress: 12, side: "SELL", avgPrice: 3410.00, totalQty: 12000, filled: 1440 },
+        { id: "ORD-9984", symbol: "NIFTY FUT", algo: "ICEBERG", progress: 88, side: "BUY", avgPrice: 19650.00, totalQty: 5000, filled: 4400 }
+    ];
+};
