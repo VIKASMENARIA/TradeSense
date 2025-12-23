@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { analyzeOptionChain, stockData } from '../data/stocks';
+import { analyzeOptionChain, stockData, searchSymbols } from '../data/stocks';
 
 export default function FnoAnalysis() {
     const [query, setQuery] = useState('');
@@ -22,22 +22,16 @@ export default function FnoAnalysis() {
     }, [wrapperRef]);
 
     // Autocomplete Logic
-    const handleInputChange = (e) => {
+    const handleInputChange = async (e) => {
         const val = e.target.value;
         setQuery(val);
 
-        if (val.length > 0) {
-            // Suggest Stocks OR Indices from both simulated AND potential live searches
-            // Since live API doesn't give a full list, we use our static list as a "directory" 
-            // but query for live prices later.
-            const indices = [{ symbol: 'NIFTY', name: 'Nifty 50' }, { symbol: 'BANKNIFTY', name: 'Bank Nifty' }, { symbol: 'FINNIFTY', name: 'Fin Nifty' }];
-            const allAssets = [...indices, ...stockData];
-
-            const filtered = allAssets
-                .filter(s => s.symbol.includes(val.toUpperCase()))
-                .slice(0, 6);
-            setSuggestions(filtered);
-            setShowSuggestions(true);
+        if (val.length > 1) {
+            try {
+                const results = await searchSymbols(val); // Assuming searchSymbols is defined elsewhere or will be added
+                setSuggestions(results);
+                setShowSuggestions(true);
+            } catch (e) { /* ignore */ }
         } else {
             setShowSuggestions(false);
         }
