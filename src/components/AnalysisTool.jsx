@@ -40,15 +40,33 @@ export default function AnalysisTool() {
         runAnalysis(symbol);
     };
 
-    const runAnalysis = (symbol) => {
+    // UPDATED: Now Async to support Live Data API
+    const runAnalysis = async (symbol) => {
         setLoading(true);
         setResult(null);
 
-        setTimeout(() => {
-            const data = analyzeStock(symbol);
-            setResult(data);
+        // Keep the UX delay slightly but fetch in parallel
+        // We wrap inside setTimeout to keep the "Analyzing..." loader visible for at least 800ms for effect, 
+        // but we can just await directly.
+        // Let's await directly but ensure min loading time.
+
+        const startTime = Date.now();
+
+        try {
+            const data = await analyzeStock(symbol);
+
+            const elapsed = Date.now() - startTime;
+            const remaining = Math.max(0, 800 - elapsed);
+
+            setTimeout(() => {
+                setResult(data);
+                setLoading(false);
+            }, remaining);
+
+        } catch (e) {
+            console.error("Analysis Failed", e);
             setLoading(false);
-        }, 800);
+        }
     };
 
     const handleSearch = (e) => {
