@@ -33,35 +33,63 @@ export const getApiConfig = () => ({
 });
 
 // ----------------------------------------------------------------------
-// DATA FETCHING LAYER
+// SYMBOL SEARCH API (AUTOCOMPLETE)
 // ----------------------------------------------------------------------
 
-// Fetch Single Quote with Retries/Fallbacks
-const fetchRealQuote = async (symbol) => {
-    if (!API_KEY) return null;
+export const searchSymbols = async (query) => {
+    if (!query) return [];
 
-    // Normalize Symbol
-    let searchSymbol = symbol.toUpperCase();
+    // 1. If Live API Configured, use Real Search
+    if (USE_LIVE_DATA && API_KEY) {
+        try {
+            console.log("Searching API for:", query);
+            const response = await fetch(`https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${query}&apikey=${API_KEY}`);
+            const data = await response.json();
 
-    // If it looks like an Indian stock (no extension), try .BSE first for better free coverage
-    if (!searchSymbol.includes('.')) {
-        // Simple heuristic: If it's a known US tech giant, don't append .BSE
-        const usTech = ['AAPL', 'GOOGL', 'AMZN', 'TSLA', 'MSFT', 'META', 'NVDA', 'IBM', 'AMD', 'INTC'];
-        if (!usTech.includes(searchSymbol) && searchSymbol.length < 10) { // arbitrary length check
-            searchSymbol = `${searchSymbol}.BSE`;
+            if (data.bestMatches) {
+                return data.bestMatches
+                    .filter(match => match['04. region'] === 'India' || match['04. region'] === 'United States') // Prioritize India/US
+                    .map(match => ({
+                        symbol: match['01. symbol'],
+                        name: match['02. name'],
+                        region: match['04. region'],
+                        type: match['03. type']
+                    }));
+            }
+            return [];
+        } catch (e) {
+            console.error("Symbol Search Error:", e);
+            return [];
         }
     }
 
+    // 2. Offline Fallback: Search in local huge list
+    const q = query.toUpperCase();
+    return ALL_INDIAN_TICKS.filter(s =>
+        s.symbol.includes(q) || s.name.toUpperCase().includes(q)
+    ).slice(0, 10);
+};
+
+// ----------------------------------------------------------------------
+// DATA FETCHING LAYER
+// ----------------------------------------------------------------------
+
+const fetchRealQuote = async (symbol) => {
+    if (!API_KEY) return null;
+    let searchSymbol = symbol.toUpperCase();
+
+    // Auto-correction for Indian symbols if user selects "RELIANCE" but needs ".BSE"
+    if (!searchSymbol.includes('.') && !searchSymbol.includes('^')) {
+        // Optimization: If it matches a known Indian ticker in our list, append .BSE
+        const isIndian = ALL_INDIAN_TICKS.find(s => s.symbol === searchSymbol);
+        if (isIndian) searchSymbol = `${searchSymbol}.BSE`;
+    }
+
     try {
-        console.log(`Fetching Quote for: ${searchSymbol}`);
         const response = await fetch(`https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${searchSymbol}&apikey=${API_KEY}`);
         const data = await response.json();
 
-        // Check for Rate Limit or Error
-        if (data["Note"] || data["Information"]) {
-            console.warn("API Rate Limit Hit:", data);
-            return null; // Return null to handle gracefully
-        }
+        if (data["Note"] || data["Information"]) return null; // Rate limit path
 
         const quote = data['Global Quote'];
         if (quote && quote['05. price']) {
@@ -76,46 +104,20 @@ const fetchRealQuote = async (symbol) => {
                 low: parseFloat(quote['04. low'])
             };
         }
-
-        // If failed with .BSE, try plain (US)
-        if (searchSymbol.includes('.BSE')) {
-            const plainSymbol = searchSymbol.replace('.BSE', '');
-            console.log(`Retrying as US symbol: ${plainSymbol}`);
-            const retryRes = await fetch(`https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${plainSymbol}&apikey=${API_KEY}`);
-            const retryData = await retryRes.json();
-            const retryQuote = retryData['Global Quote'];
-            if (retryQuote && retryQuote['05. price']) {
-                return {
-                    symbol: retryQuote['01. symbol'],
-                    price: parseFloat(retryQuote['05. price']),
-                    change: parseFloat(retryQuote['09. change']),
-                    changePercent: parseFloat(retryQuote['10. change percent'].replace('%', '')),
-                    volume: parseInt(retryQuote['06. volume'])
-                };
-            }
-        }
-
         return null;
     } catch (e) {
-        console.error("Fetch Error:", e);
         return null;
     }
 };
 
-// ----------------------------------------------------------------------
-// MARKET DASHBOARD DATA
-// ----------------------------------------------------------------------
-
 export const fetchMarketDepth = async () => {
-    if (!USE_LIVE_DATA || !API_KEY) {
-        return getSimulatedMarketDepth();
-    }
+    if (!USE_LIVE_DATA || !API_KEY) return getSimulatedMarketDepth();
 
     try {
         const response = await fetch(`https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey=${API_KEY}`);
         const data = await response.json();
 
-        if (data["top_gainers"] && data["top_losers"]) {
+        if (data["top_gainers"]) {
             const mapToSchema = (item) => ({
                 symbol: item.ticker,
                 name: item.ticker,
@@ -130,101 +132,78 @@ export const fetchMarketDepth = async () => {
                 topLosers: data["top_losers"].map(mapToSchema)
             };
         }
-        // If API fails (rate limit), fallback
         return getSimulatedMarketDepth();
     } catch (e) {
         return getSimulatedMarketDepth();
     }
 };
 
-// ----------------------------------------------------------------------
-// ANALYSIS TOOL LOGIC
-// ----------------------------------------------------------------------
-
 export const analyzeStock = async (symbol) => {
     if (!symbol) return null;
 
-    // 1. LIVE DATA FETCH
     let liveData = null;
     if (USE_LIVE_DATA && API_KEY) {
         liveData = await fetchRealQuote(symbol);
     }
 
-    // 2. ERROR HANDLING: If user wants live data but we failed to get it
     if (USE_LIVE_DATA && !liveData) {
         return {
             found: true,
             symbol: symbol.toUpperCase(),
-            name: "Data Unavailable",
+            name: "Unavailable / Limit Exceeded",
             price: "---",
             recommendation: "ERROR",
             confidence: "0%",
-            reasoning: "API RATE LIMIT or INVALID SYMBOL. Please check your Key or try a valid US/Indian ticker.",
-            metrics: {
-                orderFlow: "-",
-                institutionalActivity: "-",
-                support: "-",
-                resistance: "-",
-                rsi: "-",
-                macd: "-"
-            }
+            reasoning: "API Limit Reached or Invalid Symbol. Please wait 1 min or check connection.",
+            metrics: { orderFlow: "-", institutionalActivity: "-", support: "-", resistance: "-", rsi: "-", macd: "-" }
         };
     }
 
-    // 3. DATA PREPARATION (Use Live if available, else Sim)
-    const price = liveData ? liveData.price : 500; // 500 is fallback ONLY if live mode OFF
+    const price = liveData ? liveData.price : 500;
     const change = liveData ? liveData.changePercent : 0;
     const vol = liveData ? liveData.volume : "10M";
 
-    // If Live Mode is OFF, we MUST use a known list or pure math gen to avoid "500" for everything.
-    // Use valid simulation from base list if offline
-    let stockName = liveData ? liveData.symbol : symbol.toUpperCase();
     if (!USE_LIVE_DATA) {
-        const sim = getSimulatedStock(symbol);
+        const sim = ALL_INDIAN_TICKS.find(s => s.symbol === symbol.toUpperCase());
         if (sim) {
-            const p = parseFloat(sim.price); // use sim price
             return {
                 found: true,
                 ...sim,
-                recommendation: sim.changePercentage > 0 ? "BUY" : "SELL",
+                price: (Math.random() * 2000 + 100).toFixed(2),
+                changePercentage: (Math.random() * 4 - 2).toFixed(2),
+                recommendation: "BUY",
                 confidence: "Simulated",
                 reasoning: "Offline Mode: Using simulated market data.",
-                metrics: generateSimMetrics(sim.changePercentage > 0, parseFloat(sim.price))
+                metrics: generateSimMetrics(true, 1000)
             };
         } else {
-            // Unknown symbol in simulation mode
             return {
                 found: false,
                 symbol: symbol.toUpperCase(),
                 price: 0,
                 recommendation: "NOT FOUND",
                 confidence: "0",
-                reasoning: "Symbol not in simulation database. Connect API for real searching.",
+                reasoning: "Symbol not in database.",
                 metrics: { support: 0, resistance: 0 }
             }
         }
     }
 
-    // 4. REAL ANALYSIS GENERATION (Based on Live Data)
     const isBullish = change > 0;
-
-    // Calculate Pivot Points based on live data
     const pivot = price;
     const r1 = (price * 1.02).toFixed(2);
     const s1 = (price * 0.98).toFixed(2);
-
-    // RSI Implication (Simulated based on trend)
     const rsi = isBullish ? (50 + (change * 5)).toFixed(1) : (50 + (change * 5)).toFixed(1);
 
     return {
         found: true,
         symbol: liveData.symbol,
-        name: liveData.symbol, // API doesn't give name in global quote, use ticker
+        name: liveData.symbol,
         price: price.toFixed(2),
         changePercentage: change.toFixed(2),
         volume: vol,
         recommendation: change > 0.5 ? "STRONG BUY" : (change < -0.5 ? "STRONG SELL" : "HOLD"),
-        confidence: "98.5%", // Confidence is high because data is real
+        confidence: "98.5%",
         reasoning: isBullish
             ? `Price is trading UP by ${change}%. Momentum is positive with volume support at ${vol}. Valid breakout above local resistance.`
             : `Price is trading DOWN by ${change}%. Selling pressure detected. Broke below key support at ${s1}.`,
@@ -239,44 +218,21 @@ export const analyzeStock = async (symbol) => {
     };
 };
 
-// ----------------------------------------------------------------------
-// OPTIONS ANALYSIS (Real-Time Spot)
-// ----------------------------------------------------------------------
-
 export const analyzeOptionChain = async (symbol) => {
+    // Similar Logic to Analyze Stock
     if (!symbol) return null;
-
     let spotPrice = 0;
-
-    // Live Spot Price
     if (USE_LIVE_DATA && API_KEY) {
         const quote = await fetchRealQuote(symbol);
         if (quote) spotPrice = quote.price;
     }
 
-    // If we failed to get live spot price in live mode, return error
-    if (USE_LIVE_DATA && spotPrice === 0) {
-        return {
-            found: true,
-            tradeFound: false,
-            symbol: symbol.toUpperCase(),
-            message: "Unable to fetch spot price for this asset. Check API limit.",
-        };
-    }
-
-    // ... (rest of option logic uses spotPrice to calculate strikes)
-    // For brevity, using the previous logic but with validated spotPrice
-
-    if (spotPrice === 0) {
-        // Simulation Fallback
-        const sim = getSimulatedStock(symbol);
-        spotPrice = sim ? parseFloat(sim.price) : 1000;
-    }
+    if (spotPrice === 0 && !USE_LIVE_DATA) spotPrice = 18500; // Sim fallback
 
     const strikeStep = 50;
     const atmStrike = Math.round(spotPrice / strikeStep) * strikeStep;
-    const isCall = Math.random() > 0.5; // Strategy direction still algorithmic/random as we don't have real Option Chain API
-    const premium = (spotPrice * 0.01 + Math.random() * 5).toFixed(2); // Realistic premium approx 1-2% of spot
+    const isCall = spotPrice > 0;
+    const premium = (spotPrice * 0.01 + Math.random() * 5).toFixed(2);
 
     return {
         found: true,
@@ -285,26 +241,101 @@ export const analyzeOptionChain = async (symbol) => {
         symbol: symbol.toUpperCase(),
         spotPrice: spotPrice.toFixed(2),
         recommendation: {
-            instrument: `${symbol.toUpperCase()} 28DEC ${atmStrike} ${isCall ? 'CE' : 'PE'}`,
+            instrument: `${symbol.toUpperCase()} 28DEC ${atmStrike} CE`,
             action: "BUY",
             entry: premium,
             target: (Number(premium) * 1.3).toFixed(2),
             stopLoss: (Number(premium) * 0.8).toFixed(2),
-            confidence: "90%",
-            logic: `Spot price ${spotPrice} trending. ${isCall ? 'Breakout' : 'Breakdown'} detected near ATM strike.`
+            confidence: spotPrice > 0 ? "90%" : "0%",
+            logic: spotPrice > 0 ? "Live Spot Analysis" : "Data Unavailable"
         },
-        greeks: {
-            delta: isCall ? "0.55" : "-0.45",
-            theta: "-12.5",
-            iv: "14.2"
-        }
+        greeks: { delta: "0.55", theta: "-12.5", iv: "14.2" }
     };
 };
 
+// ----------------------------------------------------------------------
+// MASTER LIST FOR OFFLINE / FALLBACK
+// ----------------------------------------------------------------------
+const ALL_INDIAN_TICKS = [
+    { symbol: "RELIANCE", name: "Reliance Industries Ltd" },
+    { symbol: "TCS", name: "Tata Consultancy Services" },
+    { symbol: "HDFCBANK", name: "HDFC Bank Ltd" },
+    { symbol: "INFY", name: "Infosys Ltd" },
+    { symbol: "ICICIBANK", name: "ICICI Bank Ltd" },
+    { symbol: "HINDUNILVR", name: "Hindustan Unilever Ltd" },
+    { symbol: "ITC", name: "ITC Ltd" },
+    { symbol: "SBIN", name: "State Bank of India" },
+    { symbol: "BHARTIARTL", name: "Bharti Airtel Ltd" },
+    { symbol: "KOTAKBANK", name: "Kotak Mahindra Bank" },
+    { symbol: "LICI", name: "LIC India" },
+    { symbol: "LT", name: "Larsen & Toubro" },
+    { symbol: "HCLTECH", name: "HCL Technologies" },
+    { symbol: "AXISBANK", name: "Axis Bank" },
+    { symbol: "ASIANPAINT", name: "Asian Paints" },
+    { symbol: "MARUTI", name: "Maruti Suzuki" },
+    { symbol: "SUNPHARMA", name: "Sun Pharma" },
+    { symbol: "TITAN", name: "Titan Company" },
+    { symbol: "BAJFINANCE", name: "Bajaj Finance" },
+    { symbol: "ULTRACEMCO", name: "UltraTech Cement" },
+    { symbol: "ONGC", name: "Oil & Natural Gas Corp" },
+    { symbol: "NTPC", name: "NTPC Ltd" },
+    { symbol: "TATAMOTORS", name: "Tata Motors" },
+    { symbol: "POWERGRID", name: "Power Grid Corp" },
+    { symbol: "ADANIENT", name: "Adani Enterprises" },
+    { symbol: "ADANIGREEN", name: "Adani Green Energy" },
+    { symbol: "ADANIPORTS", name: "Adani Ports" },
+    { symbol: "WIPRO", name: "Wipro Ltd" },
+    { symbol: "M&M", name: "Mahindra & Mahindra" },
+    { symbol: "COALINDIA", name: "Coal India" },
+    { symbol: "BAJAJFINSV", name: "Bajaj Finserv" },
+    { symbol: "PIDILITIND", name: "Pidilite Industries" },
+    { symbol: "JSWSTEEL", name: "JSW Steel" },
+    { symbol: "NESTLEIND", name: "Nestle India" },
+    { symbol: "TATASTEEL", name: "Tata Steel" },
+    { symbol: "GRASIM", name: "Grasim Industries" },
+    { symbol: "TECHM", name: "Tech Mahindra" },
+    { symbol: "HINDALCO", name: "Hindalco Industries" },
+    { symbol: "CIPLA", name: "Cipla Ltd" },
+    { symbol: "SBILIFE", name: "SBI Life Insurance" },
+    { symbol: "BPCL", name: "Bharat Petroleum" },
+    { symbol: "BRITANNIA", name: "Britannia Industries" },
+    { symbol: "LTIM", name: "LTIMindtree" },
+    { symbol: "TATACONSUM", name: "Tata Consumer Products" },
+    { symbol: "DRREDDY", name: "Dr Reddys Labs" },
+    { symbol: "EICHERMOT", name: "Eicher Motors" },
+    { symbol: "DIVISLAB", name: "Divis Laboratories" },
+    { symbol: "INDUSINDBK", name: "IndusInd Bank" },
+    { symbol: "HEROMOTOCO", name: "Hero MotoCorp" },
+    { symbol: "APOLLOHOSP", name: "Apollo Hospitals" },
+    { symbol: "UPL", name: "UPL Ltd" },
+    { symbol: "ZOMATO", name: "Zomato Ltd" },
+    { symbol: "PAYTM", name: "One97 Communications" },
+    { symbol: "NYKAA", name: "FSN E-Commerce" },
+    { symbol: "DELHIVERY", name: "Delhivery Ltd" },
+    { symbol: "AWL", name: "Adani Wilmar" },
+    { symbol: "HAL", name: "Hindustan Aeronautics" },
+    { symbol: "BEL", name: "Bharat Electronics" },
+    { symbol: "VBL", name: "Varun Beverages" },
+    { symbol: "CHOLAFIN", name: "Cholamandalam Inv" },
+    { symbol: "SIEMENS", name: "Siemens Ltd" },
+    { symbol: "BANKBARODA", name: "Bank of Baroda" },
+    { symbol: "TRENT", name: "Trent Ltd" },
+    { symbol: "HAVELLS", name: "Havells India" },
+    { symbol: "INDIGO", name: "InterGlobe Aviation" },
+    { symbol: "JINDALSTEL", name: "Jindal Steel" },
+    { symbol: "SRF", name: "SRF Ltd" },
+    { symbol: "ICICIPRULI", name: "ICICI Pru Life" },
+    { symbol: "VEDL", name: "Vedanta Ltd" },
+    { symbol: "GAIL", name: "GAIL India" },
+    { symbol: "DLF", name: "DLF Ltd" },
+    { symbol: "DABUR", name: "Dabur India" },
+    { symbol: "SHREECEM", name: "Shree Cement" }
+];
+// (Note: This list is ~70 items. In real usage, use API search below)
 
-// ----------------------------------------------------------------------
-// HELPERS (Simulation & Metrics)
-// ----------------------------------------------------------------------
+export const stockData = ALL_INDIAN_TICKS.map(s => ({
+    ...s, price: "100.00", changePercentage: 0, volume: "0", status: 'normal'
+}));
 
 const generateSimMetrics = (isBull, price) => ({
     orderFlow: isBull ? "Buy" : "Sell",
@@ -315,54 +346,19 @@ const generateSimMetrics = (isBull, price) => ({
     macd: "0"
 });
 
-const getSimulatedStock = (sym) => {
-    return stockData.find(s => s.symbol === sym.toUpperCase());
-};
-
 const getSimulatedMarketDepth = () => {
-    const data = stockData;
-    const sorted = [...data].sort((a, b) => b.changePercentage - a.changePercentage);
+    // Generate some random movement for the offline dashboard
+    const sim = ALL_INDIAN_TICKS.slice(0, 30).map(s => ({
+        ...s,
+        price: (Math.random() * 2000 + 100).toFixed(2),
+        changePercentage: (Math.random() * 10 - 5).toFixed(2),
+        volume: "1M",
+        oi: "10K",
+        status: 'normal'
+    }));
+    const sorted = sim.sort((a, b) => b.changePercentage - a.changePercentage);
     return {
-        topGainers: sorted.slice(0, 20),
-        topLosers: sorted.slice(-20).reverse()
+        topGainers: sorted.slice(0, 10),
+        topLosers: sorted.slice(-10).reverse()
     };
 };
-
-const INDICES = [
-    { s: "NIFTY", n: "Nifty 50", p: 19500 },
-    { s: "BANKNIFTY", n: "Bank Nifty", p: 44200 }
-];
-
-// Re-generate base simulation data for fallback
-const SECTOR_LIST = ['Finance', 'Tech', 'Auto'];
-const base_stocks_list = [
-    { s: "RELIANCE", n: "Reliance Industries", p: 2450 },
-    { s: "TCS", n: "Tata Consultancy", p: 3450 },
-    { s: "INFY", n: "Infosys", p: 1420 },
-    { s: "HDFCBANK", n: "HDFC Bank", p: 1540 },
-    { s: "ICICIBANK", n: "ICICI Bank", p: 960 }
-    // ... add more if needed for SIMULATION only
-];
-
-export const stockData = base_stocks_list.map(s => ({
-    symbol: s.s,
-    name: s.n,
-    price: s.p.toFixed(2),
-    changePercentage: (Math.random() * 4 - 2).toFixed(2),
-    volume: "1M",
-    oi: "500K",
-    status: 'normal'
-}));
-
-// Add some extra randoms for depth
-for (let i = 0; i < 20; i++) {
-    stockData.push({
-        symbol: `SYM${i}`,
-        name: `Simulated Stock ${i}`,
-        price: (100 + i * 10).toFixed(2),
-        changePercentage: (Math.random() * 10 - 5).toFixed(2),
-        volume: "500K",
-        oi: "-",
-        status: 'normal'
-    });
-}

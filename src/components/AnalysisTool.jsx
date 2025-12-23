@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { analyzeStock, stockData } from '../data/stocks';
+import { analyzeStock, stockData, searchSymbols } from '../data/stocks';
 
 export default function AnalysisTool() {
     const [query, setQuery] = useState('');
@@ -19,16 +19,19 @@ export default function AnalysisTool() {
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, [wrapperRef]);
 
-    const handleInputChange = (e) => {
+    // UPDATED: Now uses API Search via searchSymbols
+    const handleInputChange = async (e) => {
         const val = e.target.value;
         setQuery(val);
 
-        if (val.length > 0) {
-            const filtered = stockData
-                .filter(s => s.symbol.includes(val.toUpperCase()) || s.name.toLowerCase().includes(val.toLowerCase()))
-                .slice(0, 8);
-            setSuggestions(filtered);
-            setShowSuggestions(true);
+        if (val.length > 1) {
+            // Debounce slightly or just call
+            // For better UX with API, we ideally debounce, but for now simple call
+            try {
+                const results = await searchSymbols(val);
+                setSuggestions(results);
+                setShowSuggestions(true);
+            } catch (e) { /* ignore */ }
         } else {
             setShowSuggestions(false);
         }
