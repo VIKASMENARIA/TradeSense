@@ -27,14 +27,15 @@ export default function FnoAnalysis() {
         setQuery(val);
 
         if (val.length > 0) {
-            // Suggest Stocks OR Indices
+            // Suggest Stocks OR Indices from both simulated AND potential live searches
+            // Since live API doesn't give a full list, we use our static list as a "directory" 
+            // but query for live prices later.
             const indices = [{ symbol: 'NIFTY', name: 'Nifty 50' }, { symbol: 'BANKNIFTY', name: 'Bank Nifty' }, { symbol: 'FINNIFTY', name: 'Fin Nifty' }];
             const allAssets = [...indices, ...stockData];
 
             const filtered = allAssets
                 .filter(s => s.symbol.includes(val.toUpperCase()))
-                .slice(0, 6); // Max 6 suggestions
-
+                .slice(0, 6);
             setSuggestions(filtered);
             setShowSuggestions(true);
         } else {
@@ -54,14 +55,17 @@ export default function FnoAnalysis() {
         runAnalysis(query);
     };
 
-    const runAnalysis = (symbol) => {
+    const runAnalysis = async (symbol) => {
         setLoading(true);
         setResult(null);
-        setTimeout(() => {
-            const data = analyzeOptionChain(symbol);
+        try {
+            const data = await analyzeOptionChain(symbol);
             setResult(data);
+        } catch (e) {
+            console.error(e);
+        } finally {
             setLoading(false);
-        }, 1200);
+        }
     };
 
     return (
@@ -163,6 +167,10 @@ export default function FnoAnalysis() {
                                     <div style={{ fontSize: 'clamp(1.2rem, 4vw, 1.8rem)', fontWeight: 'bold', color: 'var(--text-main)', wordBreak: 'break-word' }}>{result.recommendation.instrument}</div>
                                     <div style={{ fontSize: 'clamp(2rem, 5vw, 2.5rem)', fontWeight: '900', color: 'var(--success)', marginTop: '0.5rem' }}>
                                         {result.recommendation.action} @ {result.recommendation.entry}
+                                    </div>
+                                    {/* LIVE PRICE INDICATOR */}
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                                        Underlying Spot: <span style={{ color: 'var(--text-main)', fontWeight: 'bold' }}>{result.spotPrice}</span>
                                     </div>
                                 </div>
                                 <div className="fno-result-actions" style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '0.5rem', justifyContent: 'center' }}>
